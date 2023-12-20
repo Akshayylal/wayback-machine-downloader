@@ -243,63 +243,91 @@ class WaybackMachineDownloader
     end
   end
 
-  def download_file file_remote_info
-    current_encoding = "".encoding
-    file_url = file_remote_info[:file_url].encode(current_encoding)
-    file_id = file_remote_info[:file_id]
-    file_timestamp = file_remote_info[:timestamp]
-    file_path_elements = file_id.split('/')
-    if file_id == ""
-      dir_path = backup_path
-      file_path = backup_path + 'index.html'
-    elsif file_url[-1] == '/' or not file_path_elements[-1].include? '.'
-      dir_path = backup_path + file_path_elements[0..-1].join('/')
-      file_path = backup_path + file_path_elements[0..-1].join('/') + '/index.html'
-    else
-      dir_path = backup_path + file_path_elements[0..-2].join('/')
-      file_path = backup_path + file_path_elements[0..-1].join('/')
-    end
-    if Gem.win_platform?
-      dir_path = dir_path.gsub(/[:*?&=<>\\|]/) {|s| '%' + s.ord.to_s(16) }
-      file_path = file_path.gsub(/[:*?&=<>\\|]/) {|s| '%' + s.ord.to_s(16) }
-    end
-    unless File.exist? file_path
-      begin
-        structure_dir_path dir_path
-        open(file_path, "wb") do |file|
-          begin
-            URI("https://web.archive.org/web/#{file_timestamp}id_/#{file_url}").open("Accept-Encoding" => "plain") do |uri|
-              file.write(uri.read)
-            end
-          rescue OpenURI::HTTPError => e
-            puts "#{file_url} # #{e}"
-            if @all
-              file.write(e.io.read)
-              puts "#{file_path} saved anyway."
-            end
-          rescue StandardError => e
-            puts "#{file_url} # #{e}"
+def download_file(file_remote_info)
+  current_encoding = "".encoding
+  file_url = file_remote_info[:file_url].encode(current_encoding)
+  file_id = file_remote_info[:file_id]
+  file_timestamp = file_remote_info[:timestamp]
+  file_path_elements = file_id.split('/')
+  
+  # Construct file paths
+  if file_id == ""
+    dir_path = backup_path
+    file_path = backup_path + 'index.html'
+  elsif file_url[-1] == '/' or not file_path_elements[-1].include? '.'
+    dir_path = backup_path + file_path_elements[0..-1].join('/')
+    file_path = backup_path + file_path_elements[0..-1].join('/') + '/index.html'
+  else
+    dir_path = backup_path + file_path_elements[0..-2].join('/')
+    file_path = backup_path + file_path_elements.join('/')
+  end
+
+  # Handle Windows file path characters
+  if Gem.win_platform?
+    dir_path = dir_path.gsub(/[:*?&=<>\\|]/) { |s| '%' + s.ord.to_s(16) }
+    file_path = file_path.gsub(/[:*?&=<>\\|]/) { |s| '%' + s.ord.to_s(16) }
+  end
+
+  # Check if file already exists
+  unless File.exist?(file_path)
+    begin
+      # Create directory structure
+      structure_dir_path(dir_path)
+
+      # Open file for writing
+      open(file_path, "wb") do |file|
+        begin
+          # Your ScraperAPI key
+          scraperapi_key = 'YOUR_SCRAPERAPI_KEY'
+
+          # Construct the original URL for the Wayback Machine
+          original_url = "https://web.archive.org/web/#{file_timestamp}id_/#{file_url}"
+
+          # Construct the ScraperAPI URL
+          scraperapi_url = "http://api.scraperapi.com?api_key=#{scraperapi_key}&url=#{CGI.escape(original_url)}"
+
+          # Open the ScraperAPI URL
+          URI.open(scraperapi_url, "Accept-Encoding" => "plain") do |uri|
+            file.write(uri.read)
           end
+
+        rescue OpenURI::HTTPError => e
+          puts "#{file_url} # #{e}"
+          if @all
+            file.write(e.io.read)
+            puts "#{file_path} saved anyway."
+          end
+        rescue StandardError => e
+          puts "#{file_url} # #{e}"
         end
-      rescue StandardError => e
-        puts "#{file_url} # #{e}"
-      ensure
-        if not @all and File.exist?(file_path) and File.size(file_path) == 0
-          File.delete(file_path)
-          puts "#{file_path} was empty and was removed."
-        end
       end
-      semaphore.synchronize do
-        @processed_file_count += 1
-        puts "#{file_url} -> #{file_path} (#{@processed_file_count}/#{file_list_by_timestamp.size})"
+
+    rescue StandardError => e
+      puts "#{file_url} # #{e}"
+
+    ensure
+      # Remove empty files unless saving error files
+      if not @all and File.exist?(file_path) and File.size(file_path) == 0
+        File.delete(file_path)
+        puts "#{file_path} was empty and was removed."
       end
-    else
-      semaphore.synchronize do
-        @processed_file_count += 1
-        puts "#{file_url} # #{file_path} already exists. (#{@processed_file_count}/#{file_list_by_timestamp.size})"
-      end
+    end
+
+    # Synchronize file download count
+    semaphore.synchronize do
+      @processed_file_count += 1
+      puts "#{file_url} -> #{file_path} (#{@processed_file_count}/#{file_list_by_timestamp.size})"
+    end
+
+  else
+    # File already exists
+    semaphore.synchronize do
+      @processed_file_count += 1
+      puts "#{file_url} # #{file_path} already exists. (#{@processed_file_count}/#{file_list_by_timestamp.size})"
     end
   end
+end
+
 
   def file_queue
     @file_queue ||= file_list_by_timestamp.each_with_object(Queue.new) { |file_info, q| q << file_info }
